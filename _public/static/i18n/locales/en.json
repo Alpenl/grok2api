@@ -256,6 +256,8 @@
     "tabExpired": "Expired",
     "tabNsfw": "NSFW On",
     "tabNoNsfw": "NSFW Off",
+    "tabRefused": "Upstream Refused",
+    "badgeRefused": "Refused",
     "statusFilterAria": "Token status filter",
     "tableToken": "Token",
     "tableType": "Type",

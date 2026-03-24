@@ -14,10 +14,36 @@ let batchEventSource = null;
 let currentPage = 1;
 let pageSize = 50;
 
+const tokenFilters = window.TokenFilters || {};
 const byId = (id) => document.getElementById(id);
 const qsa = (selector) => document.querySelectorAll(selector);
 const DEFAULT_QUOTA_BASIC = 80;
 const DEFAULT_QUOTA_SUPER = 140;
+const hasUpstreamRefusalToken = tokenFilters.hasUpstreamRefusalToken || function (token) {
+  return !!(token && Array.isArray(token.tags) && token.tags.includes('upstream_refused'));
+};
+const matchesTokenFilter = tokenFilters.matchesTokenFilter || function (token, filter) {
+  if (!filter || filter === 'all') return true;
+  if (filter === 'active') return token.status === 'active';
+  if (filter === 'cooling') return token.status === 'cooling';
+  if (filter === 'expired') return token.status !== 'active' && token.status !== 'cooling';
+  if (filter === 'nsfw') return Array.isArray(token.tags) && token.tags.includes('nsfw');
+  if (filter === 'no-nsfw') return !Array.isArray(token.tags) || !token.tags.includes('nsfw');
+  if (filter === 'refused') return hasUpstreamRefusalToken(token);
+  return true;
+};
+const buildTokenTabCounts = tokenFilters.buildTokenTabCounts || function (tokens) {
+  const items = Array.isArray(tokens) ? tokens : [];
+  return {
+    all: items.length,
+    active: items.filter(item => matchesTokenFilter(item, 'active')).length,
+    cooling: items.filter(item => matchesTokenFilter(item, 'cooling')).length,
+    expired: items.filter(item => matchesTokenFilter(item, 'expired')).length,
+    nsfw: items.filter(item => matchesTokenFilter(item, 'nsfw')).length,
+    'no-nsfw': items.filter(item => matchesTokenFilter(item, 'no-nsfw')).length,
+    refused: items.filter(item => matchesTokenFilter(item, 'refused')).length,
+  };
+};
 
 function getDefaultQuotaForPool(pool) {
   return pool === 'ssoSuper' ? DEFAULT_QUOTA_SUPER : DEFAULT_QUOTA_BASIC;
@@ -236,15 +262,7 @@ function updateStats(data) {
   }
 
   setText('stat-total-calls', totalCalls.toLocaleString());
-
-  updateTabCounts({
-    all: totalTokens,
-    active: activeTokens,
-    cooling: coolingTokens,
-    expired: invalidTokens,
-    nsfw: nsfwTokens,
-    'no-nsfw': noNsfwTokens
-  });
+  updateTabCounts(buildTokenTabCounts(flatTokens));
 }
 
 function renderTable() {
@@ -317,6 +335,10 @@ function renderTable() {
     let statusHtml = `<span class="badge ${statusClass}">${item.status}</span>`;
     if (item.tags && item.tags.includes('nsfw')) {
       statusHtml += ` <span class="badge badge-purple">nsfw</span>`;
+    }
+    if (hasUpstreamRefusalToken(item)) {
+      const refusalTitle = escapeHtml(item.last_fail_reason || t('token.tabRefused'));
+      statusHtml += ` <span class="badge badge-red" title="${refusalTitle}">${t('token.badgeRefused')}</span>`;
     }
     tdStatus.innerHTML = statusHtml;
 
@@ -1158,26 +1180,11 @@ function filterByStatus(status) {
 
 function getFilteredTokens() {
   if (currentFilter === 'all') return flatTokens;
-
-  return flatTokens.filter(t => {
-    if (currentFilter === 'active') return t.status === 'active';
-    if (currentFilter === 'cooling') return t.status === 'cooling';
-    if (currentFilter === 'expired') return t.status !== 'active' && t.status !== 'cooling';
-    if (currentFilter === 'nsfw') return t.tags && t.tags.includes('nsfw');
-    if (currentFilter === 'no-nsfw') return !t.tags || !t.tags.includes('nsfw');
-    return true;
-  });
+  return flatTokens.filter(t => matchesTokenFilter(t, currentFilter));
 }
 
 function updateTabCounts(counts) {
-  const safeCounts = counts || {
-    all: flatTokens.length,
-    active: flatTokens.filter(t => t.status === 'active').length,
-    cooling: flatTokens.filter(t => t.status === 'cooling').length,
-    expired: flatTokens.filter(t => t.status !== 'active' && t.status !== 'cooling').length,
-    nsfw: flatTokens.filter(t => t.tags && t.tags.includes('nsfw')).length,
-    'no-nsfw': flatTokens.filter(t => !t.tags || !t.tags.includes('nsfw')).length
-  };
+  const safeCounts = counts || buildTokenTabCounts(flatTokens);
 
   Object.entries(safeCounts).forEach(([key, count]) => {
     const el = byId(`tab-count-${key}`);
