@@ -11,14 +11,7 @@ ENV PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
 
 RUN apk add --no-cache \
     tzdata \
-    ca-certificates \
-    build-base \
-    linux-headers \
-    libffi-dev \
-    openssl-dev \
-    curl-dev \
-    cargo \
-    rust
+    ca-certificates
 
 WORKDIR /app
 
@@ -33,7 +26,7 @@ RUN uv sync --frozen --no-dev --no-install-project \
     && find /opt/venv -type d -name "tests" -prune -exec rm -rf {} + \
     && find /opt/venv -type d -name "test" -prune -exec rm -rf {} + \
     && find /opt/venv -type d -name "testing" -prune -exec rm -rf {} + \
-    && find /opt/venv -type f -name "*.so" -exec strip --strip-unneeded {} + || true \
+    && if command -v strip >/dev/null 2>&1; then find /opt/venv -type f -name "*.so" -exec strip --strip-unneeded {} +; fi \
     && rm -rf /root/.cache /tmp/uv-cache
 
 FROM python:3.13-alpine
