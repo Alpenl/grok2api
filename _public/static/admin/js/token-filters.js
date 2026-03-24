@@ -5,6 +5,8 @@
   }
   root.TokenFilters = factory();
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  var UPSTREAM_REFUSAL_PREFIX = 'upstream_refusal:';
+
   function hasTag(token, tag) {
     return !!(token && Array.isArray(token.tags) && token.tags.includes(tag));
   }
@@ -17,7 +19,19 @@
     if (!token) return false;
     if (hasTag(token, 'upstream_refused')) return true;
     return typeof token.last_fail_reason === 'string'
-      && token.last_fail_reason.startsWith('upstream_refusal:');
+      && token.last_fail_reason.startsWith(UPSTREAM_REFUSAL_PREFIX);
+  }
+
+  function getUpstreamRefusalReasonCode(token) {
+    if (!token || typeof token.last_fail_reason !== 'string') return null;
+    if (!token.last_fail_reason.startsWith(UPSTREAM_REFUSAL_PREFIX)) return null;
+    var code = token.last_fail_reason.slice(UPSTREAM_REFUSAL_PREFIX.length).trim();
+    return code || null;
+  }
+
+  function formatFailureReasonCode(reasonCode) {
+    if (!reasonCode) return '';
+    return String(reasonCode).replace(/[_-]+/g, ' ').trim();
   }
 
   function matchesTokenFilter(token, filter) {
@@ -45,6 +59,8 @@
   }
 
   return {
+    formatFailureReasonCode: formatFailureReasonCode,
+    getUpstreamRefusalReasonCode: getUpstreamRefusalReasonCode,
     hasUpstreamRefusalToken: hasUpstreamRefusalToken,
     matchesTokenFilter: matchesTokenFilter,
     buildTokenTabCounts: buildTokenTabCounts,

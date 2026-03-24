@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 
 const {
   hasUpstreamRefusalToken,
+  getUpstreamRefusalReasonCode,
+  formatFailureReasonCode,
   matchesTokenFilter,
   buildTokenTabCounts,
 } = require('../_public/static/admin/js/token-filters.js');
@@ -41,6 +43,21 @@ test('matchesTokenFilter returns only refused tokens for refused filter', () => 
 
   assert.equal(matchesTokenFilter(refused, 'refused'), true);
   assert.equal(matchesTokenFilter(normal, 'refused'), false);
+});
+
+test('getUpstreamRefusalReasonCode extracts refusal code suffix', () => {
+  assert.equal(
+    getUpstreamRefusalReasonCode({
+      tags: ['upstream_refused'],
+      last_fail_reason: 'upstream_refusal:generic_refusal',
+    }),
+    'generic_refusal',
+  );
+});
+
+test('formatFailureReasonCode humanizes structured reason codes', () => {
+  assert.equal(formatFailureReasonCode('generic_refusal'), 'generic refusal');
+  assert.equal(formatFailureReasonCode('policy-blocked'), 'policy blocked');
 });
 
 test('buildTokenTabCounts includes refused count without breaking existing counts', () => {

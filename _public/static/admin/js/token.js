@@ -19,6 +19,16 @@ const byId = (id) => document.getElementById(id);
 const qsa = (selector) => document.querySelectorAll(selector);
 const DEFAULT_QUOTA_BASIC = 80;
 const DEFAULT_QUOTA_SUPER = 140;
+const formatFailureReasonCode = tokenFilters.formatFailureReasonCode || function (reasonCode) {
+  if (!reasonCode) return '';
+  return String(reasonCode).replace(/[_-]+/g, ' ').trim();
+};
+const getUpstreamRefusalReasonCode = tokenFilters.getUpstreamRefusalReasonCode || function (token) {
+  if (!token || typeof token.last_fail_reason !== 'string') return null;
+  if (!token.last_fail_reason.startsWith('upstream_refusal:')) return null;
+  const code = token.last_fail_reason.slice('upstream_refusal:'.length).trim();
+  return code || null;
+};
 const hasUpstreamRefusalToken = tokenFilters.hasUpstreamRefusalToken || function (token) {
   return !!(token && Array.isArray(token.tags) && token.tags.includes('upstream_refused'));
 };
@@ -337,7 +347,7 @@ function renderTable() {
       statusHtml += ` <span class="badge badge-purple">nsfw</span>`;
     }
     if (hasUpstreamRefusalToken(item)) {
-      const refusalTitle = escapeHtml(item.last_fail_reason || t('token.tabRefused'));
+      const refusalTitle = escapeHtml(`${t('token.refusalReasonLabel')}: ${getUpstreamRefusalText(item)}`);
       statusHtml += ` <span class="badge badge-red" title="${refusalTitle}">${t('token.badgeRefused')}</span>`;
     }
     tdStatus.innerHTML = statusHtml;
@@ -358,8 +368,17 @@ function renderTable() {
 
     // Note (Left)
     const tdNote = document.createElement('td');
-    tdNote.className = 'text-left text-gray-500 text-xs truncate max-w-[150px]';
-    tdNote.innerText = item.note || '-';
+    tdNote.className = 'text-left text-xs max-w-[220px]';
+    const noteHtml = item.note
+      ? `<div class="text-gray-500 truncate" title="${escapeHtml(item.note)}">${escapeHtml(item.note)}</div>`
+      : `<div class="text-gray-400">-</div>`;
+    if (hasUpstreamRefusalToken(item)) {
+      const refusalText = getUpstreamRefusalText(item);
+      const refusalTitle = escapeHtml(item.last_fail_reason || refusalText);
+      tdNote.innerHTML = `${noteHtml}<div class="mt-1 text-red-600 leading-4 break-words" title="${refusalTitle}">${escapeHtml(t('token.refusalReasonLabel'))}: ${escapeHtml(refusalText)}</div>`;
+    } else {
+      tdNote.innerHTML = noteHtml;
+    }
 
     // Actions (Center)
     const tdActions = document.createElement('td');
@@ -402,6 +421,17 @@ function renderTable() {
 
   tbody.replaceChildren(fragment);
   updateSelectionState();
+}
+
+function getUpstreamRefusalText(item) {
+  const code = getUpstreamRefusalReasonCode(item);
+  if (!code) {
+    return item && item.last_fail_reason ? item.last_fail_reason : t('token.tabRefused');
+  }
+  if (code === 'generic_refusal') {
+    return t('token.refusalReasonGenericRefusal');
+  }
+  return formatFailureReasonCode(code);
 }
 
 // Selection Logic

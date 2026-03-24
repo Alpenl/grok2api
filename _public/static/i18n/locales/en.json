@@ -258,6 +258,8 @@
     "tabNoNsfw": "NSFW Off",
     "tabRefused": "Upstream Refused",
     "badgeRefused": "Refused",
+    "refusalReasonLabel": "Refusal",
+    "refusalReasonGenericRefusal": "Generic safety refusal",
     "statusFilterAria": "Token status filter",
     "tableToken": "Token",
     "tableType": "Type",

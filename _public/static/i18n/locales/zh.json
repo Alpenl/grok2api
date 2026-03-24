@@ -258,6 +258,8 @@
     "tabNoNsfw": "未开 NSFW",
     "tabRefused": "上游拒绝",
     "badgeRefused": "拒绝",
+    "refusalReasonLabel": "拒绝原因",
+    "refusalReasonGenericRefusal": "通用安全拒绝",
     "statusFilterAria": "Token 状态筛选",
     "tableToken": "Token",
     "tableType": "类型",
