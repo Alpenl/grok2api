@@ -20,6 +20,23 @@ def _decode_sse_json(chunk: str) -> dict:
     return orjson.loads(chunk[6:])
 
 
+class _FakeTokenManager:
+    def __init__(self):
+        self.refusals = []
+
+    async def mark_upstream_refusal(
+        self, token: str, reason: str, tag: str = "upstream_refused"
+    ) -> bool:
+        self.refusals.append(
+            {
+                "token": token,
+                "reason": reason,
+                "tag": tag,
+            }
+        )
+        return True
+
+
 def test_collect_processor_returns_estimated_usage(monkeypatch):
     monkeypatch.setattr(
         "app.services.grok.services.chat.get_config",
@@ -53,6 +70,97 @@ def test_collect_processor_returns_estimated_usage(monkeypatch):
             result["usage"]["total_tokens"]
             == result["usage"]["prompt_tokens"] + result["usage"]["completion_tokens"]
         )
+
+    asyncio.run(_run())
+
+
+def test_collect_processor_marks_refusal_token_and_preserves_content(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.grok.services.chat.get_config",
+        lambda key, default=None: 0 if key == "chat.stream_timeout" else [],
+    )
+
+    async def _run():
+        token_mgr = _FakeTokenManager()
+        refusal = (
+            "I'm sorry, but I can't help with that. My purpose is to provide "
+            "helpful and truthful answers, and I am not able to assist with "
+            "requests that involve inappropriate content."
+        )
+        processor = CollectProcessor(
+            "grok-4",
+            token="tok_collect",
+            prompt_tokens=17,
+            token_mgr=token_mgr,
+        )
+        result = await processor.process(
+            _iter_lines(
+                [
+                    _json_line(
+                        {
+                            "result": {
+                                "response": {
+                                    "llmInfo": {"modelHash": "fp_test"},
+                                    "modelResponse": {
+                                        "responseId": "resp_collect_refusal",
+                                        "message": refusal,
+                                    },
+                                }
+                            }
+                        }
+                    )
+                ]
+            )
+        )
+
+        assert result["choices"][0]["message"]["content"] == refusal
+        assert token_mgr.refusals == [
+            {
+                "token": "tok_collect",
+                "reason": "upstream_refusal:generic_refusal",
+                "tag": "upstream_refused",
+            }
+        ]
+
+    asyncio.run(_run())
+
+
+def test_collect_processor_leaves_normal_content_unmarked(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.grok.services.chat.get_config",
+        lambda key, default=None: 0 if key == "chat.stream_timeout" else [],
+    )
+
+    async def _run():
+        token_mgr = _FakeTokenManager()
+        processor = CollectProcessor(
+            "grok-4",
+            token="tok_normal",
+            prompt_tokens=17,
+            token_mgr=token_mgr,
+        )
+        result = await processor.process(
+            _iter_lines(
+                [
+                    _json_line(
+                        {
+                            "result": {
+                                "response": {
+                                    "llmInfo": {"modelHash": "fp_test"},
+                                    "modelResponse": {
+                                        "responseId": "resp_collect_normal",
+                                        "message": "你好，世界",
+                                    },
+                                }
+                            }
+                        }
+                    )
+                ]
+            )
+        )
+
+        assert result["choices"][0]["message"]["content"] == "你好，世界"
+        assert token_mgr.refusals == []
 
     asyncio.run(_run())
 
@@ -105,6 +213,63 @@ def test_stream_processor_final_chunk_has_usage(monkeypatch):
             == final_payload["usage"]["prompt_tokens"]
             + final_payload["usage"]["completion_tokens"]
         )
+
+    asyncio.run(_run())
+
+
+def test_stream_processor_marks_refusal_token_and_preserves_chunks(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.grok.services.chat.get_config",
+        lambda key, default=None: 0 if key == "chat.stream_timeout" else [],
+    )
+
+    async def _run():
+        token_mgr = _FakeTokenManager()
+        refusal = "I'm sorry, but I can't help with that."
+        processor = StreamProcessor(
+            "grok-4",
+            token="tok_stream",
+            prompt_tokens=11,
+            token_mgr=token_mgr,
+        )
+        chunks = []
+        async for chunk in processor.process(
+            _iter_lines(
+                [
+                    _json_line(
+                        {
+                            "result": {
+                                "response": {
+                                    "responseId": "resp_stream_refusal",
+                                    "llmInfo": {"modelHash": "fp_test"},
+                                    "token": refusal,
+                                }
+                            }
+                        }
+                    )
+                ]
+            )
+        ):
+            chunks.append(chunk)
+
+        payloads = [
+            _decode_sse_json(chunk)
+            for chunk in chunks
+            if chunk.startswith("data: {")
+        ]
+        visible_content = "".join(
+            payload["choices"][0]["delta"].get("content", "")
+            for payload in payloads
+        )
+
+        assert refusal in visible_content
+        assert token_mgr.refusals == [
+            {
+                "token": "tok_stream",
+                "reason": "upstream_refusal:generic_refusal",
+                "tag": "upstream_refused",
+            }
+        ]
 
     asyncio.run(_run())
 

@@ -39,6 +39,26 @@ from app.services.token import get_token_manager, EffortType
 _CHAT_SEMAPHORE = None
 _CHAT_SEM_VALUE = None
 
+_REFUSAL_MARKERS = (
+    "i can't help with that",
+    "i cannot help with that",
+    "i can't assist with that",
+    "i cannot assist with that",
+    "i can't help with this request",
+    "i cannot help with this request",
+    "i can't assist with this request",
+    "i cannot assist with this request",
+    "i can't provide that",
+    "i cannot provide that",
+    "i'm not able to assist with requests that involve inappropriate content",
+    "i am not able to assist with requests that involve inappropriate content",
+    "can't continue with that request",
+    "cannot continue with that request",
+    "violates policy",
+    "against policy",
+    "inappropriate content",
+)
+
 
 def extract_tool_text(raw: str, rollout_id: str = "") -> str:
     if not raw:
@@ -104,6 +124,65 @@ def _get_chat_semaphore() -> asyncio.Semaphore:
         _CHAT_SEM_VALUE = value
         _CHAT_SEMAPHORE = asyncio.Semaphore(value)
     return _CHAT_SEMAPHORE
+
+
+def _normalize_refusal_text(text: str | None) -> str:
+    if not text:
+        return ""
+    normalized = str(text).translate(
+        str.maketrans(
+            {
+                "\u2018": "'",
+                "\u2019": "'",
+                "\u201c": '"',
+                "\u201d": '"',
+            }
+        )
+    )
+    return " ".join(normalized.lower().split())
+
+
+def detect_upstream_refusal_reason(text: str | None) -> str | None:
+    normalized = _normalize_refusal_text(text)
+    if not normalized:
+        return None
+
+    if any(marker in normalized for marker in _REFUSAL_MARKERS):
+        return "upstream_refusal:generic_refusal"
+
+    refusal_verbs = ("can't", "cannot", "unable", "won't", "not able")
+    if ("sorry" in normalized or "apolog" in normalized) and any(
+        marker in normalized for marker in refusal_verbs
+    ):
+        return "upstream_refusal:generic_refusal"
+
+    if any(marker in normalized for marker in refusal_verbs) and any(
+        marker in normalized
+        for marker in ("policy", "safety", "guideline", "inappropriate")
+    ):
+        return "upstream_refusal:generic_refusal"
+
+    return None
+
+
+async def mark_token_for_upstream_refusal(
+    token_mgr: Any,
+    token: str,
+    content: str | None,
+) -> None:
+    if not token_mgr or not token:
+        return
+
+    reason = detect_upstream_refusal_reason(content)
+    if not reason:
+        return
+
+    try:
+        await token_mgr.mark_upstream_refusal(token, reason)
+    except Exception as e:
+        logger.warning(
+            f"Failed to mark upstream refusal for token {token[:10]}...: {e}"
+        )
 
 
 class MessageExtractor:
@@ -453,6 +532,7 @@ class ChatService:
                         tools=tools,
                         tool_choice=tool_choice,
                         prompt_tokens=prompt_tokens,
+                        token_mgr=token_mgr,
                     )
                     return wrap_stream_with_usage(
                         processor.process(response), token_mgr, token, model
@@ -466,6 +546,7 @@ class ChatService:
                     tools=tools,
                     tool_choice=tool_choice,
                     prompt_tokens=prompt_tokens,
+                    token_mgr=token_mgr,
                 ).process(response)
                 try:
                     model_info = ModelService.get(model)
@@ -531,6 +612,7 @@ class StreamProcessor(proc_base.BaseProcessor):
         tools: List[Dict[str, Any]] = None,
         tool_choice: Any = None,
         prompt_tokens: int = 0,
+        token_mgr: Any = None,
     ):
         super().__init__(model, token)
         self.response_id: str = None
@@ -558,11 +640,17 @@ class StreamProcessor(proc_base.BaseProcessor):
         self._tool_call_index = 0
         self.prompt_tokens = max(0, int(prompt_tokens or 0))
         self._completion_parts: list[str] = []
+        self._visible_completion_parts: list[str] = []
         self._completion_tool_calls: list[dict[str, Any]] = []
+        self.token_mgr = token_mgr
 
     def _record_content(self, content: str) -> None:
         if content:
             self._completion_parts.append(content)
+
+    def _record_visible_content(self, content: str) -> None:
+        if content:
+            self._visible_completion_parts.append(content)
 
     def _record_tool_call(self, tool_call: Any) -> None:
         if isinstance(tool_call, dict):
@@ -826,6 +914,7 @@ class StreamProcessor(proc_base.BaseProcessor):
                             url, self.token, img_id
                         )
                         self._record_content(f"{rendered}\n")
+                        self._record_visible_content(f"{rendered}\n")
                         yield self._sse(f"{rendered}\n")
 
                     if (
@@ -851,9 +940,15 @@ class StreamProcessor(proc_base.BaseProcessor):
                                 title_safe = title.replace("\n", " ").strip()
                                 if title_safe:
                                     self._record_content(f"![{title_safe}]({original})\n")
+                                    self._record_visible_content(
+                                        f"![{title_safe}]({original})\n"
+                                    )
                                     yield self._sse(f"![{title_safe}]({original})\n")
                                 else:
                                     self._record_content(f"![image]({original})\n")
+                                    self._record_visible_content(
+                                        f"![image]({original})\n"
+                                    )
                                     yield self._sse(f"![image]({original})\n")
                     continue
 
@@ -890,6 +985,7 @@ class StreamProcessor(proc_base.BaseProcessor):
                         for kind, payload in self._handle_tool_stream(filtered):
                             if kind == "text":
                                 self._record_content(payload)
+                                self._record_visible_content(payload)
                                 yield self._sse(payload)
                             elif kind == "tool":
                                 self._record_tool_call(payload)
@@ -897,6 +993,7 @@ class StreamProcessor(proc_base.BaseProcessor):
                         continue
 
                     self._record_content(filtered)
+                    self._record_visible_content(filtered)
                     yield self._sse(filtered)
 
             if self.think_opened:
@@ -907,10 +1004,16 @@ class StreamProcessor(proc_base.BaseProcessor):
                 for kind, payload in self._flush_tool_stream():
                     if kind == "text":
                         self._record_content(payload)
+                        self._record_visible_content(payload)
                         yield self._sse(payload)
                     elif kind == "tool":
                         self._record_tool_call(payload)
                         yield self._sse(tool_calls=[payload])
+                await mark_token_for_upstream_refusal(
+                    self.token_mgr,
+                    self.token,
+                    "".join(self._visible_completion_parts),
+                )
                 finish_reason = "tool_calls" if self._tool_calls_seen else "stop"
                 yield self._sse(
                     finish=finish_reason,
@@ -921,6 +1024,11 @@ class StreamProcessor(proc_base.BaseProcessor):
                     ),
                 )
             else:
+                await mark_token_for_upstream_refusal(
+                    self.token_mgr,
+                    self.token,
+                    "".join(self._visible_completion_parts),
+                )
                 yield self._sse(
                     finish="stop",
                     usage=estimate_chat_usage(
@@ -977,12 +1085,14 @@ class CollectProcessor(proc_base.BaseProcessor):
         tools: List[Dict[str, Any]] = None,
         tool_choice: Any = None,
         prompt_tokens: int = 0,
+        token_mgr: Any = None,
     ):
         super().__init__(model, token)
         self.filter_tags = get_config("app.filter_tags")
         self.tools = tools
         self.tool_choice = tool_choice
         self.prompt_tokens = max(0, int(prompt_tokens or 0))
+        self.token_mgr = token_mgr
 
     def _filter_content(self, content: str) -> str:
         """Filter special tags in content."""
@@ -1151,6 +1261,8 @@ class CollectProcessor(proc_base.BaseProcessor):
                 tool_calls_result = tool_calls_list
                 content = text_content  # May be None
                 finish_reason = "tool_calls"
+
+        await mark_token_for_upstream_refusal(self.token_mgr, self.token, content)
 
         message_obj = {
             "role": "assistant",

@@ -709,6 +709,43 @@ class TokenManager:
         logger.warning(f"Token {raw_token[:10]}...: not found for rate limit marking")
         return False
 
+    async def mark_upstream_refusal(
+        self,
+        token_str: str,
+        reason: str = "upstream_refusal:generic_refusal",
+        tag: str = "upstream_refused",
+    ) -> bool:
+        """
+        记录上游拒绝响应，但不改变 token 可用状态。
+
+        Args:
+            token_str: Token 字符串
+            reason: 归一化拒绝原因
+            tag: 拒绝标签
+
+        Returns:
+            是否成功
+        """
+        raw_token = token_str.removeprefix("sso=")
+        now_ms = int(datetime.now().timestamp() * 1000)
+
+        for pool in self.pools.values():
+            token = pool.get(raw_token)
+            if token:
+                token.last_fail_at = now_ms
+                token.last_fail_reason = reason
+                if tag and tag not in token.tags:
+                    token.tags.append(tag)
+                self._track_token_change(token, pool.name, "state")
+                self._schedule_save()
+                logger.info(
+                    f"Token {raw_token[:10]}...: marked upstream refusal ({reason})"
+                )
+                return True
+
+        logger.warning(f"Token {raw_token[:10]}...: not found for refusal marking")
+        return False
+
     # ========== 管理功能 ==========
 
     async def add(self, token: str, pool_name: str = "ssoBasic") -> bool:
