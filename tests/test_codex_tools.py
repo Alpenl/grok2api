@@ -167,6 +167,5 @@ class CodexToolFallbackTests(unittest.TestCase):
         self.assertIn("-alpha", cmd)
         self.assertIn("+beta", cmd)
 
-
 if __name__ == "__main__":
     unittest.main()
