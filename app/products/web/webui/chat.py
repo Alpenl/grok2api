@@ -33,6 +33,10 @@ async def list_webui_models(request: Request):
     from app.platform.logging.logger import logger
 
     t0 = _time.monotonic()
+    # Filter by account tier availability so the WebUI dropdown only shows
+    # models the configured account pool can actually serve. Without this
+    # the user would see super/heavy-tier models that fail with
+    # "No available accounts for this model tier" on call.
     pools = await _available_pools(request)
     models = [
         {
