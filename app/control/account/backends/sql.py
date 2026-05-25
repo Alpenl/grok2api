@@ -232,6 +232,25 @@ def _extract_sql_ssl_options(
     return cleaned_url, ssl_options
 
 
+def _quota_remaining_expr(col: sa.ColumnElement[Any], dialect: str) -> sa.ColumnElement[int]:
+    """Return a dialect-safe SQL expression extracting quota ``remaining``.
+
+    Quota columns are persisted as JSON-encoded TEXT in both MySQL and
+    PostgreSQL backends. MySQL's ``json_extract`` can read from JSON text
+    directly, while PostgreSQL must cast the TEXT payload to ``JSONB``
+    before applying the ``->>`` text extraction operator.
+    """
+    if dialect == "mysql":
+        return sa.cast(sa.func.json_extract(col, "$.remaining"), sa.Integer)
+
+    from sqlalchemy.dialects import postgresql
+
+    return sa.cast(
+        sa.cast(col, postgresql.JSONB).op("->>")("remaining"),
+        sa.Integer,
+    )
+
+
 def _resolve_ssl_mode(dialect: str, ssl_options: dict[str, str]) -> str | None:
     raw_ssl_mode = next(
         (ssl_options.get(key) for key in _SQL_SSL_MODE_PARAM_KEYS if ssl_options.get(key)),
@@ -888,14 +907,7 @@ class SqlAccountRepository:
             quota_sums: dict[str, int] = {}
             for mode in ("auto", "fast", "expert", "heavy"):
                 col = getattr(t.c, f"quota_{mode}")
-                if self._dialect == "mysql":
-                    remaining_expr = sa.cast(
-                        sa.func.json_extract(col, "$.remaining"), sa.Integer
-                    )
-                else:  # postgresql
-                    remaining_expr = sa.cast(
-                        sa.func.json_extract_path_text(col, "remaining"), sa.Integer
-                    )
+                remaining_expr = _quota_remaining_expr(col, self._dialect)
                 stmt = sa.select(
                     sa.func.coalesce(sa.func.sum(remaining_expr), 0)
                 ).where(t.c.deleted_at.is_(None))
