@@ -47,9 +47,9 @@ git commit -m "docs: add community PR integration design and plan"
 Run:
 
 ```bash
-git cherry-pick <PR549_COMMITS>
-git cherry-pick <PR545_COMMITS>
-git cherry-pick <PR551_COMMITS>
+git cherry-pick 072564623b69f4172c39ff4734f1309ecf5c8b97
+git cherry-pick 13fadd54a493368f2ca24e6e659721c3ba15299c 430920f3dfa3ae629ae58eb821224f0f047b293d
+git cherry-pick 1652ff9ee770a2f44fcf378e9c1c73996f4878c7
 ```
 
 Expected: apply cleanly or with trivial conflict resolution
@@ -98,23 +98,15 @@ Only if manual conflict resolution was required.
 Run:
 
 ```bash
-git cherry-pick <PR555_COMMITS>
-git cherry-pick <PR550_COMMITS>
+git cherry-pick e42b5b0ba1611a12d0c6a493b4ab6cb72ed44ea8
+git cherry-pick 1010aaa9484577f9e19d44ca91f51fb3945de57d 1880fb2cd8853b843463c3bac5222bd95d3adf1e 57c68c83770bef71f22924f4af320f06d02321a4 b7826d282fbc2b86f8402eacc3470944c67807f5 03cc5dca27acc616f6d6d14fc585ffdc488b2b60
 ```
 
 Expected: conflicts likely in account backends and `router.py`
 
 - [ ] **Step 2: Add focused regression coverage only if conflict resolution changes behavior**
 
-Suggested target file:
-
-```python
-# tests/test_account_tiers_merge.py
-def test_placeholder():
-    assert True
-```
-
-If a real merge-specific branch is introduced, replace the placeholder with a concrete failing test before code changes.
+If manual conflict resolution introduces branch-specific account-tier behavior beyond the cherry-picked community code, add a focused failing regression test before editing production logic and re-run it after the fix.
 
 - [ ] **Step 3: Verify imports and targeted behavior**
 
@@ -160,7 +152,7 @@ Only if manual conflict resolution was required.
 Run:
 
 ```bash
-git cherry-pick <PR532_COMMITS>
+git cherry-pick 729bb8ffd14caade2183b908a418c248b94d2166 1076206a5e2a49f2c5bd968b873ef701cb38217a 8c93ccbf60e2030f30d771f44e76691c78c76211 69539b14addbfca1cc85d94fc4c4c4dc13027d23 a833e418fb1df9ed2bd5685824195c7c6ab922df
 ```
 
 Expected: may touch `responses.py` and `router.py`, but should be manageable before `#542`
@@ -180,22 +172,14 @@ Expected: pass after `#532` is integrated
 Run:
 
 ```bash
-git cherry-pick <PR542_COMMITS>
+git cherry-pick bddbad9dda5fe02d9843e935c4169cac463db44d 20593536afe312ca1d66b48f33edd600007755ad a68ac7d031f3fb51c00a9c86f197f682ca98c16b b21c3e509d569c03c75e5d45c8d6cb05eff5b56c
 ```
 
 Expected: highest conflict risk in routing and response handling
 
 - [ ] **Step 4: If merge-specific routing behavior needs custom coverage, add a focused test before adjusting code**
 
-Suggested target:
-
-```python
-# tests/test_console_xai_routing_merge.py
-def test_placeholder():
-    assert True
-```
-
-Replace with a real failing test if custom merge logic is necessary.
+If routing conflict resolution requires branch-specific logic beyond the imported PR code, add a focused failing routing test before modifying production code and re-run it after the fix.
 
 - [ ] **Step 5: Re-run focused test suite**
 
@@ -259,7 +243,18 @@ Expected: remote `dev` updated
 - Remote checkout: `/opt/grok2api`
 - Remote compose: `/opt/grok2api/docker-compose.yml`
 
-- [ ] **Step 1: Refresh remote checkout to `dev`**
+- [ ] **Step 1: Record remote pre-deploy commit**
+
+Run:
+
+```bash
+PREDEPLOY_COMMIT=$(ssh root@161.118.187.17 'cd /opt/grok2api && git rev-parse HEAD')
+echo "$PREDEPLOY_COMMIT"
+```
+
+Expected: capture the currently deployed commit hash for rollback use
+
+- [ ] **Step 2: Refresh remote checkout to `dev`**
 
 Run:
 
@@ -269,7 +264,7 @@ ssh root@161.118.187.17 'cd /opt/grok2api && git fetch origin && git checkout de
 
 Expected: remote checkout matches updated fork branch
 
-- [ ] **Step 2: Rebuild and restart app service**
+- [ ] **Step 3: Rebuild and restart app service**
 
 Run:
 
@@ -279,7 +274,7 @@ ssh root@161.118.187.17 'cd /opt/grok2api && docker compose build grok2api && do
 
 Expected: app container recreated successfully
 
-- [ ] **Step 3: Verify remote service health**
+- [ ] **Step 4: Verify remote service health**
 
 Run:
 
@@ -289,12 +284,12 @@ ssh root@161.118.187.17 'docker ps --format "table {{.Names}}\t{{.Status}}\t{{.I
 
 Expected: app healthy, `/health` returns `200`, `/v1/models` returns an HTTP response, logs show clean startup
 
-- [ ] **Step 4: Roll back if verification fails**
+- [ ] **Step 5: Roll back if verification fails**
 
 Run:
 
 ```bash
-ssh root@161.118.187.17 'cd /opt/grok2api && git checkout <known_good_commit> && docker compose up -d grok2api'
+ssh root@161.118.187.17 'cd /opt/grok2api && git checkout "$PREDEPLOY_COMMIT" && docker compose up -d grok2api'
 ```
 
-Use only if the new deployment is unrecoverable and after confirming the failure mode.
+Run this in the same shell session where Step 1 captured `PREDEPLOY_COMMIT`. Execute only if the new deployment is unrecoverable and after confirming the failure mode.
